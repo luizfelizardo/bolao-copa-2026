@@ -307,24 +307,96 @@
         }
 
         async function carregarPartidasGabarito() {
+            const spanPartidas = document.getElementById('partidas-jogadas');
+            spanPartidas.innerText = `...`;
+            
             try {
                 let finalizados = 0;
-                const res = await fetch(`https://docs.google.com/spreadsheets/d/${ID_NOVA}/gviz/tq?tqx=out:csv&sheet=GABARITO%20${grupoAtivoBolao}&_ts=${Date.now()}`, { cache: 'no-store' });
-                if(res.ok) {
-                    const linhas = (await res.text()).replace(/\r/g, '').split('\n');
-                    for(let i = 1; i < linhas.length; i++) {
-                        if (!linhas[i].trim()) continue;
-                        const c = linhas[i].split(',');
-                        if(c.length > 3 && limparTexto(c[3]) !== "" && !isNaN(limparTexto(c[3]))) finalizados++;
-                    }
+                let totais = 0;
+                // As mesmas palavras-chave para ignorar cabeçalhos
+                const ignorar = ['bolão', 'nome', 'participante', 'fase', 'campeão', 'final', 'semifinal', 'quartas', 'oitavas', 'data', 'hora', 'local', 'avos', 'mandante', 'visitante', 'jogo', 'vencedor'];
+
+                // 1. Conta jogos da Fase 1 (Apenas para o Grupo A)
+                if (grupoAtivoBolao === 'A') {
+                    try {
+                        const resF1 = await fetch(`https://docs.google.com/spreadsheets/d/${ID_ANTIGA}/gviz/tq?tqx=out:csv&sheet=GABARITO`);
+                        if (resF1.ok) {
+                            const csvF1 = await resF1.text();
+                            const linhas = csvF1.replace(/\r/g, '').split('\n');
+                            for (let i = 1; i < linhas.length; i++) {
+                                if (!linhas[i].trim()) continue;
+                                const col = linhas[i].split(',');
+                                if (col.length < 7) continue;
+                                
+                                const tM = limparTexto(col[2]); const pM = limparTexto(col[3]);
+                                const pV = limparTexto(col[5]); const tV = limparTexto(col[6]);
+
+                                if (tM && tV && !ignorar.includes(tM.toLowerCase()) && tM.length > 2) {
+                                    totais++; // Achou um jogo válido, soma no total
+                                    
+                                    // Se tem número nos dois placares, a partida acabou
+                                    if (pM !== "" && pV !== "" && !isNaN(pM) && !isNaN(pV)) {
+                                        finalizados++;
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e) { console.warn("Gabarito Fase 1 não carregado."); }
                 }
-                document.getElementById('partidas-jogadas').innerText = `${finalizados} finalizados`;
-            } catch (e) {
-                console.warn("Erro ao carregar gabarito:", e);
-                document.getElementById('partidas-jogadas').innerText = "- finalizados";
+
+                // 2. Conta jogos da Fase 2 (Mata-Mata)
+                try {
+                    const resF2 = await fetch(`https://docs.google.com/spreadsheets/d/${ID_NOVA}/gviz/tq?tqx=out:csv&sheet=GABARITO%20${grupoAtivoBolao}`);
+                    if (resF2.ok) {
+                        const csvF2 = await resF2.text();
+                        const linhas = csvF2.replace(/\r/g, '').split('\n');
+                        let matriz = linhas.map(l => l.split(',').map(limparTexto));
+                        
+                        for(let r = 0; r < matriz.length - 1; r++) {
+                            for(let c = 0; c < matriz[r].length - 1; c++) {
+                                let t1 = matriz[r][c]; let p1 = matriz[r][c+1];
+                                let t2 = matriz[r+1][c]; let p2 = matriz[r+1][c+1];
+
+                                if (t1 && t2 && t1 !== t2) {
+                                    let isHeader1 = ignorar.some(kw => t1.toLowerCase().includes(kw));
+                                    let isHeader2 = ignorar.some(kw => t2.toLowerCase().includes(kw));
+                                    
+                                    let p1Valido = p1 === "" || (!isNaN(p1) && Number(p1) < 30);
+                                    let p2Valido = p2 === "" || (!isNaN(p2) && Number(p2) < 30);
+
+                                    let t1Valido = isNaN(t1) && t1.length > 2 && !t1.match(/\d{2}\/\d{2}/) && !t1.includes(' - ');
+                                    let t2Valido = isNaN(t2) && t2.length > 2 && !t2.match(/\d{2}\/\d{2}/) && !t2.includes(' - ');
+
+                                    if (!isHeader1 && !isHeader2 && p1Valido && p2Valido && t1Valido && t2Valido) {
+                                        totais++; // Achou jogo na matriz
+                                        
+                                        // Se os placares foram preenchidos, soma finalizados
+                                        if (p1 !== "" && p2 !== "") {
+                                            finalizados++;
+                                        }
+                                        matriz[r+1][c] = ""; // Limpa a linha de baixo
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e) { console.warn("Gabarito Fase 2 não carregado."); }
+
+                // Modifica os textos na tela
+                spanPartidas.innerText = `${finalizados} de ${totais}`;
+                
+                // Pega a tag <span> que fica logo abaixo (onde estava escrito "jogadas") 
+                // e muda para "finalizadas" para fazer sentido gramatical
+                const spanAbaixo = spanPartidas.nextElementSibling;
+                if (spanAbaixo) {
+                    spanAbaixo.innerText = "finalizadas";
+                }
+
+            } catch (erro) {
+                console.error("Erro geral no gabarito:", erro);
+                spanPartidas.innerText = "-";
             }
         }
-
         function criarCardJogoHTML(mandante, plM, plV, visitante) {
             return `
                 <div class="bg-slate-800/60 border border-slate-700/40 rounded-xl p-3 flex items-center justify-between gap-2 mb-2.5">
@@ -342,19 +414,20 @@
         async function abrirPalpites(nomeUsuario, pontos) {
             document.getElementById('modal-titulo-nome').innerText = `Palpites de ${nomeUsuario}`;
             document.getElementById('modal-sub-pontos').innerText = `${pontos} pontos acumulados`;
-
+            
             const containerPalpites = document.getElementById('modal-lista-palpites');
             containerPalpites.innerHTML = `<div class="text-center text-slate-400 py-12 text-sm animate-pulse">⚡ A buscar histórico de palpites...</div>`;
             document.getElementById('modal-palpites').classList.remove('hidden');
 
             try {
                 let htmlFinal = '';
-                const ignorar = ['bolão', 'nome', 'participante', 'fase', 'campeão', 'final', 'semifinal', 'quartas', 'oitavas', 'data', 'hora', 'local', 'avos', 'mandante', 'visitante'];
+                // Palavras que o script vai ignorar se achar na planilha
+                const ignorar = ['bolão', 'nome', 'participante', 'fase', 'campeão', 'final', 'semifinal', 'quartas', 'oitavas', 'data', 'hora', 'local', 'avos', 'mandante', 'visitante', 'jogo', 'vencedor'];
 
-                // 1. Fase 1 (Apenas para Grupo A) - aba pelo nome do usuário
+                // 1. Fase 1 (Apenas para Grupo A)
                 if (grupoAtivoBolao === 'A') {
                     try {
-                        const resFase1 = await fetch(`https://docs.google.com/spreadsheets/d/${ID_ANTIGA}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(nomeUsuario)}&_ts=${Date.now()}`, { cache: 'no-store' });
+                        const resFase1 = await fetch(`https://docs.google.com/spreadsheets/d/${ID_ANTIGA}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(nomeUsuario)}`);
                         if (resFase1.ok) {
                             const csvF1 = await resFase1.text();
                             const linhas = csvF1.replace(/\r/g, '').split('\n');
@@ -381,12 +454,12 @@
                 // 2. Fase 2 (Busca na aba "NOME A" ou "NOME B")
                 try {
                     const nomeAbaNova = `${nomeUsuario} ${grupoAtivoBolao}`;
-                    const resFase2 = await fetch(`https://docs.google.com/spreadsheets/d/${ID_NOVA}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(nomeAbaNova)}&_ts=${Date.now()}`, { cache: 'no-store' });
+                    const resFase2 = await fetch(`https://docs.google.com/spreadsheets/d/${ID_NOVA}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(nomeAbaNova)}`);
                     if (resFase2.ok) {
                         const csvF2 = await resFase2.text();
                         const linhas = csvF2.replace(/\r/g, '').split('\n');
                         let matriz = linhas.map(l => l.split(',').map(limparTexto));
-
+                        
                         let htmlF2 = `<div class="text-[10px] font-bold text-yellow-500 uppercase tracking-widest text-center mt-6 mb-3 border-t border-slate-700/50 pt-5">Fase Mata-Mata</div>`;
                         let temF2 = false;
 
@@ -398,13 +471,20 @@
                                 if (t1 && t2 && t1 !== t2) {
                                     let isHeader1 = ignorar.some(kw => t1.toLowerCase().includes(kw));
                                     let isHeader2 = ignorar.some(kw => t2.toLowerCase().includes(kw));
-                                    let p1Valido = p1 === "" || !isNaN(p1);
-                                    let p2Valido = p2 === "" || !isNaN(p2);
+                                    
+                                    // CORREÇÃO: Verifica se o placar é vazio ou se é um número menor que 30 (Evita pegar o número do jogo, ex: Jogo 81)
+                                    let p1Valido = p1 === "" || (!isNaN(p1) && Number(p1) < 30);
+                                    let p2Valido = p2 === "" || (!isNaN(p2) && Number(p2) < 30);
 
-                                    if (!isHeader1 && !isHeader2 && p1Valido && p2Valido && isNaN(t1) && t1.length > 2) {
+                                    // CORREÇÃO: Garante que o time não é um número, tem mais de 2 letras e NÃO contém formato de data (ex: 01/07)
+                                    let t1Valido = isNaN(t1) && t1.length > 2 && !t1.match(/\d{2}\/\d{2}/) && !t1.includes(' - ');
+                                    let t2Valido = isNaN(t2) && t2.length > 2 && !t2.match(/\d{2}\/\d{2}/) && !t2.includes(' - ');
+
+                                    if (!isHeader1 && !isHeader2 && p1Valido && p2Valido && t1Valido && t2Valido) {
                                         temF2 = true;
                                         htmlF2 += criarCardJogoHTML(t1, p1, p2, t2);
-                                        matriz[r+1][c] = "";
+                                        // Limpa a célula de baixo para não repetir o mesmo jogo no loop
+                                        matriz[r+1][c] = ""; 
                                     }
                                 }
                             }
