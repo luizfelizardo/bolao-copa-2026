@@ -60,8 +60,9 @@
             <div class="bg-slate-800/50 border border-slate-700/30 rounded-2xl overflow-hidden shadow-2xl">
                 <div class="grid grid-cols-12 bg-slate-700/40 px-4 py-3 text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-700/50">
                     <div class="col-span-2 text-center">Pos</div>
-                    <div class="col-span-7">Participante</div>
+                    <div class="col-span-5">Participante</div>
                     <div class="col-span-3 text-center">Pontos</div>
+                    <div class="col-span-2 text-center">Chance</div>
                 </div>
                 <div id="ranking-lista" class="divide-y divide-slate-700/40">
                     <div class="p-6 text-center text-sm text-slate-500">Sincronizando dados...</div>
@@ -173,6 +174,27 @@
             return n;
         }
 
+        // Calcula a "chance de título" de cada participante com base na
+        // distância de pontos em relação ao líder. Quem está mais perto do
+        // topo recebe uma fatia maior; a soma de todas as chances fecha 100%.
+        // Fórmula: peso_i = 2 ^ (-(pontosLider - pontos_i) / fatorSuavizacao)
+        // O fatorSuavizacao é proporcional à amplitude de pontos do grupo,
+        // então funciona tanto para diferenças pequenas quanto grandes.
+        function calcularChances(participantesArray) {
+            if (participantesArray.length === 0) return [];
+            if (participantesArray.length === 1) return [100];
+
+            const pontosLider = participantesArray[0].pontos;
+            const pontosUltimo = participantesArray[participantesArray.length - 1].pontos;
+            const amplitude = Math.max(pontosLider - pontosUltimo, 1);
+            const fatorSuavizacao = amplitude / 3; // controla o quão "disputado" parece
+
+            const pesos = participantesArray.map(p => Math.pow(2, -(pontosLider - p.pontos) / fatorSuavizacao));
+            const somaPesos = pesos.reduce((a, b) => a + b, 0);
+
+            return pesos.map(peso => (peso / somaPesos) * 100);
+        }
+
         function navegarPara(idTela) {
             const telas = ['tela-classificacao', 'tela-estatisticas'];
             telas.forEach(t => {
@@ -264,6 +286,10 @@
                 });
                 participantesArray.sort((a, b) => b.pontos - a.pontos);
 
+                // Calcula a chance de título de cada participante (em %)
+                const chances = calcularChances(participantesArray);
+                participantesArray.forEach((p, idx) => { p.chance = chances[idx]; });
+
                 listaContainer.innerHTML = '';
                 let posicaoExibida = 1, ultimaPontuacao = -1;
 
@@ -277,11 +303,20 @@
                         else if (posicaoExibida === 2) badgeColor = 'bg-gradient-to-r from-slate-300 to-slate-400 text-slate-950 font-bold border border-slate-200';
                         else if (posicaoExibida === 3) badgeColor = 'bg-gradient-to-r from-amber-600 to-amber-700 text-amber-50 font-semibold border border-amber-800';
 
+                        // Cor da "chance" varia conforme a probabilidade: mais alta = mais verde
+                        let corChance = 'text-slate-500';
+                        if (p.chance >= 30) corChance = 'text-emerald-400';
+                        else if (p.chance >= 10) corChance = 'text-sky-400';
+                        else if (p.chance >= 1) corChance = 'text-slate-400';
+
+                        const chanceTexto = p.chance >= 10 ? p.chance.toFixed(0) : p.chance.toFixed(1);
+
                         listaContainer.innerHTML += `
                             <div onclick="abrirPalpites('${p.nome.replace(/'/g, "\\'")}', ${p.pontos})" class="grid grid-cols-12 px-4 py-3.5 items-center hover:bg-slate-700/40 cursor-pointer active:bg-slate-800 transition-colors group">
                                 <div class="col-span-2 flex justify-center"><span class="w-6 h-6 rounded-full flex items-center justify-center text-xs ${badgeColor}">${posicaoExibida}</span></div>
-                                <div class="col-span-7 font-semibold text-sm text-slate-200 truncate pr-2 group-hover:text-yellow-400 transition-colors">${p.nome}</div>
+                                <div class="col-span-5 font-semibold text-sm text-slate-200 truncate pr-2 group-hover:text-yellow-400 transition-colors">${p.nome}</div>
                                 <div class="col-span-3 text-center font-bold text-sm text-white">${p.pontos} <span class="text-slate-500 font-normal text-xs">pts</span></div>
+                                <div class="col-span-2 text-center font-bold text-xs ${corChance}">${chanceTexto}%</div>
                             </div>
                         `;
                     });
